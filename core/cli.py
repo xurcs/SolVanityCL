@@ -67,7 +67,6 @@ def search_pubkey(
     iteration_bits,
     is_case_sensitive,
 ):
-    """Search for Solana vanity pubkeys."""
     if not starts_with and not ends_with:
         click.echo("Please provide at least one of --starts-with or --ends-with.")
         ctx = click.get_current_context()
@@ -117,17 +116,6 @@ def search_pubkey(
                     ],
                 )
                 result_count += save_result(results, output_dir)
-
-
-@cli.command(context_settings={"show_default": True})
-def show_device():
-    """Show available OpenCL devices."""
-    platforms = cl.get_platforms()
-    for p_index, platform in enumerate(platforms):
-        click.echo(f"Platform {p_index}: {platform.name}")
-        devices = platform.get_devices(device_type=cl.device_type.GPU)
-        for d_index, device in enumerate(devices):
-            click.echo(f"  - Device {d_index}: {device.name}")
 
 
 if __name__ == "__main__":

@@ -65,24 +65,35 @@ class Searcher:
 
     def find(self, log_stats: bool = True) -> np.ndarray:
         start_time = time.time()
-        cl.enqueue_copy(self.command_queue, self.memobj_key32, self.setting.key32)
+        copy_event = cl.enqueue_copy(self.command_queue, self.memobj_key32, self.setting.key32)
+        
         global_worker_size = self.setting.global_work_size // self.gpu_chunks
-        cl.enqueue_nd_range_kernel(
+        
+        kernel_event = cl.enqueue_nd_range_kernel(
             self.command_queue,
             self.kernel,
             (global_worker_size,),
             (self.setting.local_work_size,),
+            wait_for=[copy_event]
         )
-        self.command_queue.flush()
+        
         self.setting.increase_key32()
-        if self.prev_time is not None and self.is_nvidia:
-            time.sleep(self.prev_time * 0.98)
-        cl.enqueue_copy(self.command_queue, self.output, self.memobj_output).wait()
-        self.prev_time = time.time() - start_time
+
+        read_event = cl.enqueue_copy(
+            self.command_queue, 
+            self.output, 
+            self.memobj_output, 
+            wait_for=[kernel_event]
+        )
+        read_event.wait()
+        
+        elapsed = time.time() - start_time
+        self.prev_time = elapsed
+        
         if log_stats:
-            logging.info(
-                f"GPU {self.display_index} Speed: {global_worker_size / ((time.time() - start_time) * 1e6):.2f} MH/s"
-            )
+            speed = global_worker_size / (elapsed * 1e6)
+            logging.info(f"GPU {self.display_index} Speed: {speed:.2f} MH/s")
+        
         return self.output
 
 
@@ -101,36 +112,48 @@ def multi_gpu_init(
             setting=setting,
             chosen_devices=chosen_devices,
         )
+        
         i = 0
         st = time.time()
+        batch_size = 5
+        
         while True:
-            result = searcher.find(i == 0)
-            if result[0]:
-                with lock:
-                    if not stop_flag.value:
-                        stop_flag.value = 1
-                return result.tolist()
-            if time.time() - st > max(gpu_counts, 1):
+            # Process a batch of keys
+            for _ in range(batch_size):
+                result = searcher.find(i == 0)
+                if result[0]:
+                    with lock:
+                        if not stop_flag.value:
+                            stop_flag.value = 1
+                    return result.tolist()
+                i += 1
+            
+            current_time = time.time()
+            if current_time - st > max(gpu_counts, 1):
                 i = 0
-                st = time.time()
+                st = current_time
                 with lock:
                     if stop_flag.value:
                         return result.tolist()
-            else:
-                i += 1
+                        
     except Exception as e:
         logging.exception(e)
+        
     return [0]
 
 
 def save_result(outputs: List, output_dir: str) -> int:
     from core.utils.crypto import save_keypair
+    from pathlib import Path
+    import os
 
+    keypairs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "keypairs")
+    Path(keypairs_dir).mkdir(parents=True, exist_ok=True)
     result_count = 0
     for output in outputs:
         if not output[0]:
             continue
         result_count += 1
         pv_bytes = bytes(output[1:])
-        save_keypair(pv_bytes, output_dir)
+        save_keypair(pv_bytes, keypairs_dir)
     return result_count

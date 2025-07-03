@@ -10,27 +10,25 @@ DEFAULT_LOCAL_WORK_SIZE = 32
 class HostSetting:
     def __init__(self, kernel_source: str, iteration_bits: int):
         self.iteration_bits = iteration_bits
-        # iteration_bytes 为需要被迭代覆盖的字节数（向上取整）
         self.iteration_bytes = np.ubyte(ceil(iteration_bits / 8))
         self.global_work_size = 1 << iteration_bits
-        self.local_work_size = DEFAULT_LOCAL_WORK_SIZE
+        self.local_work_size = 128
         self.kernel_source = kernel_source
         self.key32 = self.generate_key32()
+        self._increment_value = 1 << iteration_bits
 
     def generate_key32(self) -> np.ndarray:
-        token_bytes = secrets.token_bytes(
-            32 - int(self.iteration_bytes)
-        ) + b"\x00" * int(self.iteration_bytes)
-        key32 = np.array(list(token_bytes), dtype=np.ubyte)
+        key32 = np.zeros(32, dtype=np.ubyte)
+        random_part = secrets.token_bytes(32 - int(self.iteration_bytes))
+        key32[:32-int(self.iteration_bytes)] = np.frombuffer(random_part, dtype=np.ubyte)
         return key32
 
     def increase_key32(self) -> None:
-        current_number = int(bytes(self.key32).hex(), 16)
-        next_number = current_number + (1 << self.iteration_bits)
-        new_key32 = np.array(list(next_number.to_bytes(32, "big")), dtype=np.ubyte)
-        carry_index = -int(self.iteration_bytes)
-        if (new_key32[carry_index] < self.key32[carry_index]) and new_key32[
-            carry_index
-        ] != 0:
-            new_key32[carry_index] = 0
-        self.key32[:] = new_key32
+        idx = 31
+        carry = self._increment_value
+        
+        while carry > 0 and idx >= 0:
+            total = int(self.key32[idx]) + carry
+            self.key32[idx] = total & 0xFF
+            carry = total >> 8
+            idx -= 1
